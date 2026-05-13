@@ -1,0 +1,639 @@
+---
+title: "Log_priors"
+author: "Marie Hansen"
+date: today
+format: 
+ html:
+  toc: true
+  number-sections: true
+  theme: flatly
+  df-print: kable
+editor: visual
+---
+
+# Prior elicitation lognormal case
+
+```{r}
+#| label: setup 
+
+library(modelsummary)
+library(MASS) 
+library(brms)
+library(lme4)
+library(marginaleffects)
+library(ggplot2)
+
+```
+
+## Information on the data and analysis
+
+In this script, we will use the data of a published study by Audrey Bürki from 2017:
+
+Bürki, A. (2017). Electrophysiological characterization of facilitation
+and interference in the picture‐word interference paradigm. *Psychophysiology*, *54*(9), 1370-1392.
+
+In this study, twenty-three students (four males) aged between 20 and 34 years, all native speakers of French, participated in a picture-word interference experiment. In this paradigm, participants name pictures while ignoring a visually or auditorily presented distractor word.
+
+Fifty-six disyllabic French nouns (18 feminine) and their corresponding pictures (black and white) were selected as targets. Another 168 French disyllabic nouns (54 feminine) were additionally selected as distractors. Participants were familiarized with the target words and their corresponding pictures prior to the experiment. Each target appeared in four experimental conditions in randomized order: In the overlap first syllable condition, the distractor shared the first phonological (and orthographic) syllable with the target word. In
+the overlap second syllable condition, the distractor shared the second phonological
+(and orthographic) syllable with the target word. In the unrelated condition, targets
+and distractor words did not overlap phonologically or orthographically in any position of the word. In a neutral condition, a string of XXXs was superimposed on the
+target picture. Each picture appeared once in each condition.
+
+Response latencies (in ms = milliseconds) and word durations (in ms) of the produced responses were measured. Here, we analyze word durations. We expect to find an effect of experimental condition (or *distractor-target relatedness*) on word duration. A control predictor for phoneme count will be included into the model.
+
+Predictors:
+- Condition (categorical factor with two levels, related and unrelated, coded with a scaled sum contrast, with -0.5, assigned to the related condition and 0.5 to the unrelated condition)
+- Number of phonemes (numerical predictor, control variable)
+
+## Load and prepare the data
+
+```{r}
+#| label: boxcox
+data_Buerki_correct <- read.csv("data_Buerki_duration_phonemecount.csv")
+
+class(data_Buerki_correct$word_duration) #numeric
+class(data_Buerki_correct$condition) #character
+class(data_Buerki_correct$latency) #numeric
+class(data_Buerki_correct$phoneme_count) #integer
+class(data_Buerki_correct$target_word) #character
+class(data_Buerki_correct$participant_ID) #character
+
+data_Buerki_correct$condition <- as.factor(data_Buerki_correct$condition)
+data_Buerki_correct$phoneme_count <- as.numeric(data_Buerki_correct$phoneme_count)
+data_Buerki_correct$target_word <- as.factor(data_Buerki_correct$target_word)
+data_Buerki_correct$participant_ID <- as.factor(data_Buerki_correct$participant_ID)
+
+# Contrasts for effect of distractor-target relatedness
+levels(data_Buerki_correct$condition) # neut, ov2
+data_Buerki_correct$condition <- relevel(data_Buerki_correct$condition, "ov2")
+contrasts(data_Buerki_correct$condition) <- c(-0.5, 0.5)
+contrasts(data_Buerki_correct$condition) # ov2 (related) -0.5, neut (unrelated) 0.5
+
+```
+
+## Priors for brms model with log likelihood
+
+### Background
+
+When we define a prior, we set mu as the location parameter along with some standard deviation. In a model with a Gaussian likelihood, the location parameter mu represents the mean. Moreover, the mean happens to be identical to the median and the mode. In the log-normal distribution, the mean is dependent on both mu and sigma and it is not the same as the location parameter. If we set a prior with mu zero in the lognormal, the location zero is not equivalent to the mean but the log median. We can compute the mean as exp(mu_normal + sigma_normal_squared/2). Using the log likelihood, the prior for mu should be on the log milliseconds scale instead of the milliseconds scale, i.e., Normal(mu_log, sd_log).
+
+The standard deviation of a log-normal distribution with location mu and scale sigma is calculated as exp(sigma_normal + sigma_normal_squared/2) \* sqrt(exp(sigma_normal_squared - 1)). Unlike the normal distribution, the spread of the log-normal distribution depends on both mu and sigma.
+
+It seems that there are two ways to come up with meaningful priors on the log scale:
+
+a\) Computing the mean and variance based on an informative effect size derived from previous evidence (using mathematical formulas). (This is what Schad et al. (2023) did in their paper *Workflow techniques for the robust use of bayes factors*.) However, it is hard to come up with exact computations, as the effect will also depend on the intercept and sigma.
+
+b\) Approximating a reasonable prior by means of prior predictive checks. It seems kind of inevitable to run prior predictive checks, as it will be hard to know how the prior predictive distribution actually turns out on the normal scale without them.
+
+In both cases, the prior will be more restrictive as on the normal scale, because a change of 1 on the log scale equates to a different amount of milliseconds depending on where you are in the scale (e.g., + 0.01 log ms increase at 500 ms on the normal scale corresponds to a +5 ms increase but at 1000 ms, this would correspond to a 10 ms increase). We cannot translate the same prior range as on the normal scale to the log scale for this reason. Moreover, different values of the intercept, given the same beta will affect the difference in word durations (our dependent variable) for two adjacent trials (compare this with what happens with an additive model, such as when a normal likelihood is used). This is because, unlike in the additive case, the intercept doesn’t cancel out in the formula when computing the difference between trials. The impact of sigma is also much more pronounced in the lognormal. Sigma affects the entire predictive distribution, including the intercept and slope predictions. The influence of sigma is particularly pronounced in lognormal models because sigma enters the lognormal mean exponentially. If log(Y) \~ Normal(mu, sigma), then mean(Y) = exp(mu + sigma\^2/2), while Y \~ Normal(mu, sigma) and mean(Y) = mu.
+
+For further reading, see:
+
+Nicenboim, B., Schad, D. J., & Vasishth, S. (2025). *Introduction to Bayesian data analysis for cognitive science*. Chapman and Hall/CRC.
+
+(Most relevant chapters: 3.7, 4.2, 5.3, A4)
+
+### Our priors on the normal scale
+
+Priors on the normal scale:
+
+Intercept: Normal(500, 375)
+
+Effect of condition: Normal(0, 100)
+
+Effect of phoneme count: Normal(0, 150)
+
+Sigma: Normal(0, 200)
+
+SD: Normal(0, 100)
+
+Cor: lkj(2)
+
+These priors are based on previous knowledge from published work. The prior on the intercept reflects the assumption that the most likely value for word durations is 500 ms, with 95% of the values ranging between -250 and 1250 ms. The prior on beta (the effect of condition) reflects the assumption that the most likely efect size for the effect of distractor-target relatedness on word duration ranges between -10 and 10 ms. For all other priors, we followed common recommendations for regularizing priors.
+
+### Priors on the log scale 
+
+Assuming a scaled sum contrast of -0.5/ 0.5, beta corresponds to the difference in word durations between related and unrelated conditions. (This is different to a sum contrast of -1/ 1, which is assumed in *Introduction to Bayesian data analysis* by Nicenboim et al. (2025) - The intercept represents the same thing in both coding schemas, what changes is how a particular difference between conditions maps to the coefficient.)
+
+With -1/ 1: difference = beta\*(1 - (-1)) = 2beta and beta = log-diff/2 --\> beta corresponds to half the difference in log units.
+
+With -0.5/ 0.5: difference = beta\*(0.5 - (-0.5)) = 1beta, so beta = log-diff/1 = log-diff. --\> beta equals the full difference in log units.
+
+Side note: It is a property of exponents that exp(x + y) = exp(x) \* exp(y) --\> To express a multiplicative relationship, we can use the exponent of a sum.
+
+------------------------------------------------------------------------
+
+If Y are our data (on the normal scale), we can compute using mu and sigma on the log scale: mean(Y) = exp(mu + sigma\^2/2)\
+median(Y) = exp(mu) SD(Y) = exp(mu + sigma\^2/2)\*sqrt(exp(sigma\^2) - 1)
+
+```{r}
+#| label: interceptpriors 
+
+#intercept_mu <- round(log(500), digits = 3) # 6.215 
+#log(500) = 6.125 is the log of the original-scale mean only if sigma = 0
+# To get the correct mu (the log-scale location) from a desired original-scale mean, we must substract sigma^2/2. 
+# Using a sigma of 1.5 (derived from a regularizing prior in Nicenboim et al.
+sigma_log <- 1.5
+intercept_mu <- round((log(500) - sigma_log^2/2), digits = 3) #5.09 
+
+# Adapt code below after computing the correct mu! 
+
+# Intercept prior, similar to Nicenboim et al.: Normal(6.215, 1.5) 
+# Using this prior check the range within we are 95% sure that the expected median of the observations will lie
+c(lower = exp(intercept_mu - 2*sigma_log),
+  upper = exp(intercept_mu + 2*sigma_log))
+#      lower       upper 
+#   8.084915 3261.687570 
+# This prior allows for a much wider range of values than the prior we had defined on the normal scale. However, the range seems reasonable after all. 
+
+# Adapt slightly 
+sigma_log2 <- 1
+intercept_mu2 <- round((log(500) - sigma_log2^2/2), digits = 3) #5.715 
+c(lower = exp(intercept_mu2 - 2*sigma_log2),
+  upper = exp(intercept_mu2 + 2*sigma_log2))
+#     lower      upper 
+#  41.05859 2241.72290   
+
+# Compare to descriptives
+min(data_Buerki_correct$word_duration) #152.18
+max(data_Buerki_correct$word_duration) #769.263
+mean(data_Buerki_correct$word_duration) #393.8241
+
+# Lower even a bit more 
+sigma_log3 <- 0.75
+intercept_mu3 <- round((log(500) - sigma_log3^2/2), digits = 3)
+c(lower = exp(intercept_mu3 - 2*sigma_log3),
+  upper = exp(intercept_mu3 + 2*sigma_log3))
+#     lower      upper 
+#  84.18359 1690.87259 
+```
+
+We will go with mu 5.715 and a standard deviation of 1 for our intercept prior. We'll see how the prior predictive checks turn out.
+
+Before we run them, we need a reasonable prior for sigma, the residual standard deviation on the log scale. This is not directly an SD in milliseconds but controls how variable durations are multiplicatively. Recall: The larger sigma is, the more right skew (more extreme values) and large SD on the milliseconds scale. Sigma affects the entire predictive distribution, including the intercept and slope predictions. If sigma increases slightly, the right tail qickly becomes enormous and slope effects on the original scale also inflate. In the lognormal, sigma controls spread, skewness/ heaviness of the right tail/ likelihood of extreme values, multiplicative variability, and the mean.
+
+Following Ciaccio & Verissimo (2022), we could try the truncated Normal(0, 1) or Normal(0, 0.5) as regularizing priors for sigma. This will allow for a wide range of possible values. Gelman (2006) states that Normal(0, 1) should only be used if extremely high values are okay. If possible, however, sigma should be chosen based on real expectations of variability. How can we derive reasonable expectations for the residual standard deviation?
+
+Note that there are alternatives for the normal distribution when it comes to priors, we could for instance also go for a Student t distribution (this seems to be a reasonable choice for sigma priors in many cases). We will avoid this here for now, to avoid adding in more confusion.
+
+```{r}
+#| label: formulapriors_sigma
+# Prior predictive check
+
+fit_prior_log <- brm(word_duration ~ 1, 
+                     data = data_Buerki_correct,
+                     family = lognormal(),
+                     prior = c(prior(normal(5.715, 1), class = "Intercept"),
+                               prior(normal(0, 1), class = "sigma")),
+                     sample_prior = "only",
+                     control = list(adapt_delta = 0.9))
+
+#plot(fit_prior_log)
+
+int_plot_log <- pp_check(fit_prior_log, type = "stat", stat = "mean", prefix = "ppd")
+int_plot_log
+
+int_plot <- pp_check(fit_prior_log, type = "stat", stat = "mean", prefix = "ppd") +
+  scale_x_continuous("Word durations (ms)", trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of means")
+int_plot
+
+int_plot_min <- pp_check(fit_prior_log, type = "stat", stat = "min", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of minimum values")
+int_plot_min
+
+int_plot_max <- pp_check(fit_prior_log, type = "stat", stat = "max", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of maximum values")
+int_plot_max
+
+# The distributions look a bid wide, with very extreme values to the right of the tail.
+# To tighten the skew, we can tighten the prior on sigma. 
+# To keep the absolute location from drifting to huge values, we can tighten the prior on the intercept. This will result in higher minimum values, too. 
+
+# Let's start with sigma. 
+fit_prior_log2 <- brm(word_duration ~ 1, 
+                     data = data_Buerki_correct,
+                     family = lognormal(),
+                     prior = c(prior(normal(5.715, 1), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma")),
+                     sample_prior = "only",
+                     control = list(adapt_delta = 0.9))
+
+int_plot_mean2 <- pp_check(fit_prior_log2, type = "stat", stat = "mean", prefix = "ppd") +
+  scale_x_continuous("Word durations (ms)", trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of means")
+int_plot_mean2
+
+int_plot_min2 <- pp_check(fit_prior_log2, type = "stat", stat = "min", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of minimum values")
+int_plot_min2
+
+int_plot_max2 <- pp_check(fit_prior_log2, type = "stat", stat = "max", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of maximum values")
+int_plot_max2
+
+# This looks way better! Let's see what happens if we tighten the prior on the intercept slightly 
+fit_prior_log3 <- brm(word_duration ~ 1, 
+                     data = data_Buerki_correct,
+                     family = lognormal(),
+                     prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma")),
+                     sample_prior = "only",
+                     control = list(adapt_delta = 0.9))
+
+int_plot_mean3 <- pp_check(fit_prior_log3, type = "stat", stat = "mean", prefix = "ppd") + scale_x_continuous("Word durations (ms)", trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of means")
+int_plot_mean3
+
+int_plot_min3 <- pp_check(fit_prior_log3, type = "stat", stat = "min", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of minimum values")
+int_plot_min3
+
+int_plot_max3 <- pp_check(fit_prior_log3, type = "stat", stat = "max", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of maximum values")
+int_plot_max3
+
+# This looks pretty reasonable.
+# The intercept and sigma also play a role for beta. 
+# Let's add the prior on beta and see if we are still good. 
+```
+
+The prior on our slope beta will have mu zero, as we want to allow the effect to be either positive or negative (we are agnostic with regard to its direction). We expect a small range for the effect. Recall that for the model with the Gaussian likelihood, we had defined a prior based on the assumption that the effect peaks at zero and 95% of the values range between -10 and +10 ms.
+
+We want 95% of the prior mass to fall within a range Delta_D with bound D. Effects are multiplicative in the log case, so we need to take into account the intercept (median) in order to interpret beta. Delta D = log((median + D)/median); SD = Delta_D/1.96
+
+However, we should keep in mind that +/- 10 ms will refer to median effects here and mean effects will be spread out wider! The prior on beta will actually control the ratio of medians, not the difference in means.... Again, we will need prior predictive checks for a final decision.
+
+```{r}
+#| label: logpriors_beta
+
+#If mu is 5.715, corresponding to a median of 303.38 (computed by taking the exponent of 5.715) and D is 10 ms
+median_ms <- exp(5.715) 
+#Delta = log((303.38 + 10)/303.38) = log(313.38/303.38)
+Delta <- log((median_ms + 10)/median_ms)
+sd_beta <- Delta/1.96
+
+# Deriving the prior from these computations, we get to normal(0, 0.0165) 
+
+```
+
+pp_check only gives us means, minimum and maximum values of predicted outcomes. However, we now want to look at the predicted difference between conditions according to our prior on beta. We can draw expected means by condition from the prior and plot the effect then.
+
+```{r}
+#| label: priordraws
+
+# Generate prior predictive distribution including beta
+fit_prior_trial3 <- brm(word_duration ~ 1 + condition, data = data_Buerki_correct,
+                       family = lognormal(),
+                      prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma"),
+                               prior(normal(0, 0.0165), class = b, coef = "condition1")),
+                      sample_prior = "only",
+                      control = list(adapt_delta = 0.9))
+
+# Create a new data frame with contrasts
+newdata <- data.frame(
+  condition = c("ov2", "neut")
+)
+
+# Draw from the prior of fit_prior_trial3 (gives expected means for both conditions on the original (ms) scale, including information from intercept, beta, and sigma)
+mu_draws <- fitted(fit_prior_trial3, newdata = newdata, summary = FALSE)
+
+# Compute prior predictive effect (the difference between conditions)
+effect_ms <- mu_draws[,2] - mu_draws[,1]
+
+quantile(effect_ms, probs = c(0.025, 0.5, 0.975))
+#       2.5%         50%       97.5% 
+#-19.4202624  -0.0207065  21.8794686 
+
+# The range seems a bit too wide 
+
+# Plot
+ggplot(data.frame(effect_ms = effect_ms), aes(x = effect_ms)) + 
+  geom_histogram(bins = 80, fill = "grey70", color = "black") + 
+  geom_vline(xintercept = 0, linetype = "dashed") + 
+  coord_cartesian(xlim = c(-40, 40)) +
+  labs(x = "Expected difference between conditions (ms)",
+       y = "Prior predictive density",
+       title = "Prior predictive distribution of relatedness effect")
+
+# Compute probability of certain effects
+mean(abs(effect_ms) > 5)   
+mean(abs(effect_ms) > 10)  
+
+# Let's tighten the prior a bit more, such that we approximate the beta prior we had defined for the Gaussian likelihood
+fit_prior_trial4 <- brm(word_duration ~ 1 + condition, data = data_Buerki_correct,
+                       family = lognormal(),
+                      prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma"),
+                               prior(normal(0, 0.01), class = b, coef = "condition1")),
+                      sample_prior = "only",
+                      control = list(adapt_delta = 0.9))
+
+mu_draws2 <- fitted(fit_prior_trial4, newdata = newdata, summary = FALSE)
+
+effect_ms2 <- mu_draws2[,2] - mu_draws2[,1]
+
+quantile(effect_ms2, probs = c(0.025, 0.5, 0.975))
+#        2.5%          50%        97.5% 
+#-12.51184295   0.07258327  12.57588773 
+
+# Here we are. 
+
+ggplot(data.frame(effect_ms2 = effect_ms2), aes(x = effect_ms2)) + 
+  geom_histogram(bins = 80, fill = "grey70", color = "black") + 
+  geom_vline(xintercept = 0, linetype = "dashed") + 
+  coord_cartesian(xlim = c(-40, 40)) +
+  labs(x = "Expected difference between conditions (ms)",
+       y = "Prior predictive density",
+       title = "Prior predictive distribution of relatedness effect")
+
+```
+
+At this point, the best priors seem to be:
+
+Intercept \~ Normal(5.715, 0.75)\
+Sigma \~ Normal+(0, 0.5)\
+Beta \~ Normal(0, 0.01)
+
+Let's add in the priors for the standard deviation of the random effects and correlations and check whether the prior predictive distribution still looks reasonable overall. If yes, we can start running the first model.
+
+In many papers, the lkj(2) prior is still used together with the lognormal likelihood, so we will stick to it. For the SD on random effects, it is usually assumed to be tighter as the residual standard deviation (not more variance is expected due to participants or items, than overall random variation). We will try using half the SD we defined for sigma.
+
+```{r}
+#| label: priorpredict_all 
+
+fit_prior_all <- brm(word_duration ~ 1 + condition + 
+                       (1 + condition|participant_ID) + 
+                       (1 + condition|target_word),
+                     data = data_Buerki_correct,
+                       family = lognormal(),
+                      prior = 
+                       c(prior(normal(5.715, 0.75), class = "Intercept"),
+                         prior(normal(0, 0.5), class = "sigma"),
+                         prior(normal(0, 0.01), class = b, coef = "condition1"),
+                         prior(normal(0, 0.25), class = "sd"),
+                         prior(lkj(2), class = "cor")),
+                      sample_prior = "only",
+                      control = list(adapt_delta = 0.9))
+
+int_plot_mean4 <- pp_check(fit_prior_all, type = "stat", stat = "mean", prefix = "ppd") +
+  scale_x_continuous("Word durations (ms)", trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of means")
+int_plot_mean4
+
+int_plot_min4 <- pp_check(fit_prior_all, type = "stat", stat = "min", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of minimum values")
+int_plot_min4
+
+int_plot_max4 <- pp_check(fit_prior_all, type = "stat", stat = "max", prefix = "ppd") + scale_x_continuous("Word durations (ms)",
+                     trans = "log", labels = scales::number_format(accuracy = 1)) +
+  ggtitle("Prior predictive distribution of maximum values")
+int_plot_max4
+```
+
+There is still some probability of very high maximum values but this seems okay, given that our data will also have an influence in the actual model.
+
+Last but not least: We need a prior for the effect of the number of phonemes of a target word. In the normal case, we had defined a prior of Normal(0, 150), assuming that the most likely effect ranges between -300 and +300 ms.
+
+```{r}
+#| label: prior_phonemecount
+
+#If logmu is 5.715 and D is 300 ms
+Delta_phonemecount <- log((median_ms + 300)/median_ms)
+sd_beta_phonemecount <- Delta_phonemecount/1.96 
+sd_beta_phonemecount # 0.35
+
+# Based on our experience with the beta priors for the relatedness effect, we already know that mean effects will be spread out more than median effects. Let's start with a somewhat tighter prior than Normal(0, 0.35) 
+fit_prior_phonemecount <- brm(word_duration ~ 1 + phoneme_count, data = data_Buerki_correct,
+                       family = lognormal(),
+                      prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma"),
+                               prior(normal(0, 0.35), class = b, coef = "phoneme_count")),
+                      sample_prior = "only",
+                      control = list(adapt_delta = 0.9))
+
+# We now want to know: What happens when a word has one more phoneme?
+
+# Create data frame
+newdata_phonemecount <- data.frame(
+  phoneme_count = c(0, 1)
+)
+
+mu_draws_phonemecount <- fitted(fit_prior_phonemecount, newdata = newdata_phonemecount, summary = FALSE)
+
+effect_ms_phonemecount <- mu_draws_phonemecount[,2] - mu_draws_phonemecount[,1]
+
+quantile(effect_ms_phonemecount, probs = c(0.025, 0.5, 0.975))
+#         2.5%           50%         97.5% 
+#-1126.4969240    -0.3051526    82.3090898 
+
+```
+
+We see extreme negative values here. This is not what was expected. Why does this happen and how could we fix it?
+
+The prior for number of phonemes is extremely uninformative. One phoneme could nearly double the median word duration (recall that the median is 303 with our priors). As noted in the beginning of this script, a change of 1 on the log scale equates to a different amount of milliseconds depending on where you are in the scale (e.g., + 0.01 log ms increase at 500 ms on the normal scale corresponds to a +5 ms increase but at 1000 ms, this would correspond to a 10 ms increase). We cannot translate the same prior range as on the normal scale to the log scale for this reason.
+
+We use a numerical predictor here and we tried to compare the baseline (zero effect of phoneme count) to a one-unit increase (or more units increase). Beta defines per-unit multiplicative change on the median as a function of the predictor value x (the numerical value of the predictor at which the expected word duration is evaluated). The baseline mean (when the predictor is zero) is: exp(intercept + sigma\^2/2). The difference in means between two predictor values x1 and x0 equals the baseline mean multiplied by exp(beta \* x1) - exp(beta \*x0) and if x1 \> x0, exp(beta \* x1) \> exp(beta \* x0). When beta is negative and x1 \> x0, this difference can be arbitrarily large in the negative direction because the baseline mean does not cancel out.
+
+Due to the negative sign of the effect, in the lognormal model, the expected mean for a larger x-value (the higher value we are comparing to the baseline) can become much smaller than the expected mean at the baseline. Because the baseline term (determined by intercept and residual variance) sets the overall scale of the expected mean, we can get to very large negative differences of means.
+
+In simpler words: Predictors scale the expected word duration up or down by a multiplicative factor. The intercept defines the expected word duration when the predictor takes its reference value (for example, when latency is zero). The regression coefficient determines how much this baseline duration is stretched or compressed as the predictor increases. Because effects are multiplicative, changes in the predictor do not have the same impact everywhere on the scale. When a predictor has a negative effect, increasing its value reduces the expected word duration by multiplying the baseline duration by a factor smaller than one. If the baseline duration is large, even a modest reduction factor can result in a very large decrease in milliseconds. As a consequence, differences in expected word duration between two predictor values can become extremely large in the negative direction.
+
+Based on the literature, the average duration of a French phoneme is about 80 ms. Due to coarticulation etc., the effect may rather be smaller within a word.
+
+```{r}
+#| label: prior_phonemecount2
+
+#If logmu is 5.715 and D is 80 ms
+Delta_phonemecount2 <- log((median_ms + 80)/median_ms)
+sd_beta_phonemecount2 <- Delta_phonemecount2/1.96 
+sd_beta_phonemecount2 # 0.12
+
+fit_prior_phonemecount2 <- brm(word_duration ~ 1 + phoneme_count, data = data_Buerki_correct,
+                       family = lognormal(),
+                      prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma"),
+                               prior(normal(0, 0.12), class = b, coef = "phoneme_count")),
+                      sample_prior = "only",
+                      control = list(adapt_delta = 0.9))
+
+mu_draws_phonemecount2 <- fitted(fit_prior_phonemecount2, newdata = newdata_phonemecount, summary = FALSE)
+
+effect_ms_phonemecount2 <- mu_draws_phonemecount2[,2] - mu_draws_phonemecount2[,1]
+
+quantile(effect_ms_phonemecount2, probs = c(0.025, 0.5, 0.975))
+#        2.5%          50%        97.5% 
+#-310.7106551    0.2277438   70.6024070 
+
+
+```
+
+Still not really what we want. We should probably consider defining the prior such that it does not peak at zero. For the relatedness effect, it was reasonable for it to peak at zero but this is not the case for the effect of the number of phonemes. Let's make the effect peak at 60 milliseconds and allow it to range between 0 and 120 ms on the normal scale.
+
+Problem: What we mean here, conceptually, is "each phoneme of a word increases its duration from 0 ms (no phoneme = no word) to 60 ms on average". We could express this belief in an additive Gaussian model (if phoneme count is zero, the expected duration will be zero). This will work in the formula for the model. However, lognormal models cannot express additive growth from zero. They express multiplicative growth from a positive baseline.
+
+In our lognormal model, a phoneme count of zero means "a word whose duration is governed by the intercept".
+
+\
+We must define the prior for our effect relative to a positive reference duration. This reference could be:
+
+-   The typical word duration (= the median)
+
+-   The expected duration at the mean phoneme count
+
+-   A centered predictor baseline
+
+The expected duration at the mean phoneme count seems to be a good reference point. We need to center our predictor, so we can implement it.
+
+The intercept always reflects *all predictors being zero*, so changing what zero means for one predictor changes the intercept accordingly. If we center the predictor for phoneme count on the mean phoneme count, the intercept will be the mean word duration when holding phoneme count at the mean.
+
+For our prior, this means: At the mean phoneme count, one additional phoneme increases duration from the median to the median + 60 ms. Let's compute the corresponding mu and SD for our prior and see how the effect turns out with reference to the mean.
+
+```{r}
+#| label: prior_phonemecount_centered
+
+# Comput the mean phoneme count
+mean_phonemes <- mean(data_Buerki_correct$phoneme_count) #4.8
+
+# Add centered phoneme count to df
+data_Buerki_correct$phoneme_count_c <- data_Buerki_correct$phoneme_count - mean_phonemes
+
+# Compute the multiplicative factor for 60 ms 
+factor_60 <- (median_ms + 60) / median_ms 
+
+# Convert the factor to a log scale mean 
+beta_mean <- log(factor_60)
+
+# We want to allow the effect to range between 0 and 120 ms. Compute the uncertainty by using these values as upper and lower bounds
+beta_lower  <- 0
+beta_upper <- log((median_ms + 120) / median_ms)
+
+# Compute prior SD
+beta_sd <- (beta_upper - beta_mean) / 1.96
+
+# We now have the two values that we can use for the prior
+round(beta_mean, digits = 2) #0.18
+round(beta_sd, digits = 2) #0.08 
+
+# The prior will be normal(0.18, 0.08)
+
+# Run prior predictive check using this prior. 
+fit_prior_phonemecount3 <- brm(word_duration ~ 1 + phoneme_count, data = data_Buerki_correct,
+                       family = lognormal(),
+                      prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                               prior(normal(0, 0.5), class = "sigma"),
+                               prior(normal(0.18, 0.08), class = b, coef = "phoneme_count")),
+                      sample_prior = "only",
+                      control = list(adapt_delta = 0.9))
+
+# What happens if a word has one or several phonemes more than the mean phoneme count? 
+mu_draws_phonemecount3 <- fitted(fit_prior_phonemecount3, newdata = newdata_phonemecount, summary = FALSE)
+
+effect_ms_phonemecount3 <- mu_draws_phonemecount3[,2] - mu_draws_phonemecount3[,1]
+
+quantile(effect_ms_phonemecount3, probs = c(0.025, 0.5, 0.975))
+#      2.5%        50%      97.5% 
+#  4.143688  25.478389 116.114605 
+
+# This effect is a bit smaller than what we had in mind but in the end, the predictor is only a control predictor. We can probably go with this prior. 
+
+```
+
+We now have reasonable log scale priors for our model:
+
+-   Intercept \~ Normal(5.715, 0.75)
+
+-   Beta relatedness \~ Normal(0, 0.1)
+
+-   Beta phoneme count \~ Normal(0.18, 0.08)
+
+-   Residual standard deviation \~ Normal(0, 0.5)
+
+-   Standard deviation of random effects and correlations \~ Normal(0, 0.25)
+
+-   Correlations \~ lkj(2)
+
+With these priors, we are ready to model the effect of distractor-target relatedness on word duration.
+
+## Word duration by distractor-target relatedness
+
+```{r}
+#| label: dur_by_rel
+
+# Run model
+m1_duration_log <- brm(word_duration ~ 1 + condition + phoneme_count_c + 
+                       (1 + condition|participant_ID) + 
+                       (1 + condition|target_word), 
+             prior = c(prior(normal(5.715, 0.75), class = "Intercept"),
+                       prior(normal(0, 0.1), class = "b", coef ="condition1"),
+                       prior(normal(0.18, 0.08), class = "b", coef = "phoneme_count_c"),
+                       prior(normal(0, 0.5), class = "sigma"), 
+                       prior(normal(0, 0.25), class = "sd"),
+                       prior(lkj(2), class = "cor")),
+             data = data_Buerki_correct,
+             family = lognormal(), chains = 4, cores = 4, iter = 4000)
+
+# Save 
+save(m1_duration_log, file = "m1_duration_Buerki_phonemecount_log.Rda")
+
+summary(m1_duration_log)
+#Regression Coefficients:
+#                Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS #Tail_ESS
+#Intercept           5.95      0.04     5.88     6.02 1.01      500      951
+#condition1         -0.01      0.01    -0.02     0.01 1.00    11215     5727
+#phoneme_count_c     0.12      0.02     0.08     0.17 1.00      917     1480
+
+# Sanity check: Compare estimates to an lmer model 
+m1_duration_log_freq <- lmer(log(word_duration) ~ 1 + condition + phoneme_count_c + (1 + condition|participant_ID) + (1 + condition|target_word), data = data_Buerki_correct, REML = TRUE) 
+
+summary(m1_duration_log_freq)
+#Fixed effects:
+#                 Estimate Std. Error t value
+#(Intercept)      5.943972   0.033033 179.939
+#condition1      -0.006219   0.005322  -1.168
+#phoneme_count_c  0.116427   0.023705   4.912
+
+# Looks fine. 
+
+### Transform model estimates back to the normal scale 
+
+# Draw posterior samples 
+alpha_samples_dur <- as_draws_df(m1_duration_log)$b_Intercept
+beta_samples_dur <- as_draws_df(m1_duration_log)$b_condition1
+
+# We will consider the difference between ov2 and neut and create a new dataframe where we can later store the estimates from the posterior.
+newdata_condition <- data.frame(
+  condition = c("ov2", "neut"),
+  phoneme_count_c = 0
+)
+
+# Use posterior_epred to obtain conditional expected means. The function will take care of back-transforming the estimates. 
+epred_dur <- posterior_epred(
+  m1_duration_log,
+  newdata = newdata_condition,
+  re_formula = NA
+)
+
+diff_cond <- epred_dur[, 2] - epred_dur[, 1]
+
+# Delta 
+mean(diff_cond) #-2.392537
+
+# 95 % CrI
+quantile(diff_cond, c(0.025, 0.975))
+#     2.5%     97.5% 
+#-6.801935  1.969286 
+
+
+```
+
+## 
