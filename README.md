@@ -2,6 +2,7 @@
 This repository is intended as a reproducible reference for prior elicitation in Bayesian regression models using a log likelihood. It contains the following files:
 - data_Buerki_duration_phonemecount.csv (dataset from a published study)
 - Logpriors_demo.qmd (R script that shows my personal workflow for eliciting priors for a lognormal model)
+- Logpriors_demo.html (rendered script) 
 
 
 Prior elicitation is a key step in Bayesian regression modeling. In models with a Gaussian likelihood, priors can often be specified directly based on prior knowledge or interpretable expectations on the observed scale.
